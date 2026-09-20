@@ -27,7 +27,7 @@ def get_cultura_book(ean: str):
     target_product_url = target_url
 
     try:
-        # 1. Appel avec ZenRows en augmentant le wait_for pour laisser le composant web charger les produits
+        # 1. Appel de la page de recherche avec ZenRows
         zenrows_url = f"https://api.zenrows.com/v1/?apikey={ZENROWS_API_KEY}&url={target_url}&js_render=true&premium_proxy=true&wait_for=wc-plp-layout"
         response = requests.get(zenrows_url, timeout=60)
         
@@ -36,25 +36,27 @@ def get_cultura_book(ean: str):
 
         soup = BeautifulSoup(response.text, 'html.parser')
 
-        # 2. Chercher un lien produit qui contient l'EAN ou qui se trouve dans la grille de résultats
+        # 2. Règle stricte : Chercher en priorité absolue un lien qui contient l'EAN dans son URL ou son voisinage
         product_link = None
         for a in soup.find_all('a', href=True):
             href = a['href']
-            
-            # On cherche en priorité un lien contenant l'EAN dans l'URL (très courant sur Cultura)
+            # Si l'EAN exact est dans le lien ou le parent immédiat, c'est obligatoirement le bon produit
             if ean in href:
                 product_link = href
                 break
-                
-            # Sinon, on cherche un lien .html avec un slug long et des chiffres, hors catégories
-            if href.endswith('.html') and '-' in href:
-                # Exclure explicitement les bannières et catégories
-                if any(ex in href for ex in ['/livre.html', '/ebook.html', 'livre-occasion', 'coups-de-coeur', 'meilleures-ventes', 'nouveautes', 'precommandes', 'univers-', 'promotions', 'enfants']):
-                    continue
-                filename = href.split('/')[-1]
-                if len(filename) > 20 and any(char.isdigit() for char in filename):
-                    product_link = href
-                    break
+
+        # Si on ne trouve pas l'EAN dans l'URL, on cherche un lien produit qui ne soit ni une liseuse, ni une promo, ni une catégorie
+        if not product_link:
+            for a in soup.find_all('a', href=True):
+                href = a['href']
+                if href.endswith('.html') and '-' in href:
+                    # Exclusions strictes des bannières, liseuses et catégories
+                    if any(ex in href for ex in ['/liseuse', 'liseuse-', 'ebook', 'univers-', 'promotions', 'livre-occasion', 'coups-de-coeur', 'meilleures-ventes', 'nouveautes', 'precommandes', 'enfants', '/search']):
+                        continue
+                    filename = href.split('/')[-1]
+                    if len(filename) > 20:
+                        product_link = href
+                        break
 
         if product_link:
             if product_link.startswith('/'):
@@ -79,7 +81,8 @@ def get_cultura_book(ean: str):
                 for item in items:
                     if item.get("@type") in ["Book", "Product"] or "name" in item:
                         item_name = item.get("name")
-                        if title == "Titre non trouvé" and item_name and item_name not in ["Cultura", "Résultats de recherche", "Livre"]:
+                        # S'assurer que le nom n'est pas un titre générique de site ou de pub
+                        if title == "Titre non trouvé" and item_name and item_name not in ["Cultura", "Résultats de recherche", "Livre", "Liseuse Vivlio Inkpad 4"]:
                             title = item_name
                         if not cover_url and item.get("image"):
                             img = item.get("image")
@@ -89,12 +92,12 @@ def get_cultura_book(ean: str):
             except Exception:
                 continue
 
-        # Fallback si le titre est introuvable
+        # Fallbacks ciblés
         if title == "Titre non trouvé":
             og_title = soup.find('meta', property='og:title')
             if og_title and og_title.get('content'):
                 content = og_title['content']
-                if content not in ["Résultats de recherche", "Cultura", "Livre"]:
+                if content not in ["Résultats de recherche", "Cultura", "Livre", "Liseuse Vivlio Inkpad 4"]:
                     title = content
 
         if not cover_url:
