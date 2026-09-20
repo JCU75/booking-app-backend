@@ -29,7 +29,7 @@ def get_cultura_book(ean: str):
     try:
         # Appel via l'API ZenRows avec le rendu JS activé
         zenrows_url = f"https://api.zenrows.com/v1/?apikey={ZENROWS_API_KEY}&url={target_url}&js_render=true"
-        response = requests.get(zenrows_url, timeout=35)
+        response = requests.get(zenrows_url, timeout=60)
         
         if response.status_code != 200:
             print(f"-> Erreur ZenRows status: {response.status_code}")
