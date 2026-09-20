@@ -21,14 +21,23 @@ ZENROWS_API_KEY = os.environ.get("ZENROWS_API_KEY")
 def get_cultura_book(ean: str):
     target_url = f"https://www.cultura.com/search/results?search_query={ean}"
     try:
-        # On demande à ZenRows d'attendre l'apparition d'un élément produit (ex: un lien produit ou une classe de grille)
-        zenrows_url = f"https://api.zenrows.com/v1/?apikey={ZENROWS_API_KEY}&url={target_url}&js_render=true&premium_proxy=true&wait_for=.search-results, .product-item, a.one-product"
+        zenrows_url = f"https://api.zenrows.com/v1/?apikey={ZENROWS_API_KEY}&url={target_url}&js_render=true&premium_proxy=true"
         response = requests.get(zenrows_url, timeout=60)
         
-        # On retourne un extrait des premiers 1500 caractères du texte brut de la page
+        html_content = response.text
+        
+        # On vérifie si l'EAN est présent dans le HTML renvoyé
+        ean_present = ean in html_content
+        # On cherche s'il y a un bloc de données react ou json-ld
+        has_json_ld = "application/ld+json" in html_content
+        
         return {
             "status_code": response.status_code,
-            "html_snippet": response.text[:1500]
+            "html_length": len(html_content),
+            "ean_found_in_html": ean_present,
+            "has_json_ld": has_json_ld,
+            # On extrait un morceau un peu plus loin dans le texte (par exemple du caractère 5000 à 7000)
+            "html_middle_snippet": html_content[5000:7000] if len(html_content) > 7000 else "Page trop courte"
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
