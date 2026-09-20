@@ -1,7 +1,7 @@
 import os
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from playwright.sync_api import sync_playwright
+import requests
 from bs4 import BeautifulSoup
 import json
 
@@ -15,121 +15,89 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+ZENROWS_API_KEY = os.environ.get("ZENROWS_API_KEY")
 
 @app.get("/get-book/{ean}")
 def get_cultura_book(ean: str):
-    search_url = f"https://www.cultura.com/search/results?search_query={ean}"
-    print(f"\n--- RECHERCHE POUR EAN : {ean} ---")
+    target_url = f"https://www.cultura.com/search/results?search_query={ean}"
+    print(f"\n--- RECHERCHE ZENROWS POUR EAN : {ean} ---")
 
     title = "Titre non trouvé"
     date_commercialisation = "Inconnue"
     cover_url = ""
 
     try:
-        with sync_playwright() as p:
-            # Lancement avec des arguments pour masquer l'automatisation
-            browser = p.chromium.launch(
-                headless=True,
-                args=[
-                    "--disable-blink-features=AutomationControlled",
-                    "--no-sandbox",
-                    "--disable-setuid-sandbox"
-                ]
-            )
-            
-            # Contexte simulant un vrai utilisateur (Chrome sur Windows)
-            context = browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                viewport={"width": 1920, "height": 1080},
-                locale="fr-FR"
-            )
-            
-            page = context.new_page()
-            
-            # Script anti-détection pour masquer le flag webdriver
-            page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+        # Appel via l'API ZenRows avec le rendu JS activé
+        zenrows_url = f"https://api.zenrows.com/v1/?apikey={ZENROWS_API_KEY}&url={target_url}&js_render=true"
+        response = requests.get(zenrows_url, timeout=35)
+        
+        if response.status_code != 200:
+            print(f"-> Erreur ZenRows status: {response.status_code}")
+            raise HTTPException(status_code=500, detail="Erreur lors de la récupération via ZenRows")
 
-            page.goto(search_url, timeout=25000)
+        soup = BeautifulSoup(response.text, 'html.parser')
 
-            product_url = None
-            try:
-                page.wait_for_selector("a.one-product", timeout=12000)
-                product_link_el = page.locator("a.one-product").first
-                product_url = product_link_el.get_attribute("href")
-                print(f"-> Lien produit détecté : {product_url}")
-            except Exception as e:
-                print("-> Attention : Aucun élément 'a.one-product' trouvé sur la page de recherche.")
-
-            if product_url:
+        react_div = soup.select_one("div#new-react-product-details")
+        
+        # Si on est sur la page de recherche, on cherche le premier lien produit
+        if not react_div:
+            product_link = soup.select_one("a.one-product")
+            if product_link and product_link.get("href"):
+                product_url = product_link["href"]
                 if product_url.startswith("/"):
                     product_url = f"https://www.cultura.com{product_url}"
+                
+                # Second appel pour récupérer la page produit finale
+                prod_zenrows_url = f"https://api.zenrows.com/v1/?apikey={ZENROWS_API_KEY}&url={product_url}&js_render=true"
+                prod_response = requests.get(prod_zenrows_url, timeout=35)
+                if prod_response.status_code == 200:
+                    soup = BeautifulSoup(prod_response.text, 'html.parser')
+                    react_div = soup.select_one("div#new-react-product-details")
 
-                print(f"-> Navigation directe vers la page produit : {product_url}")
-                page.goto(product_url, timeout=25000)
-            else:
-                try:
-                    page.locator("a.one-product").first.click(timeout=5000)
-                except:
-                    pass
-
+        if react_div and react_div.has_attr("data-graphql-response"):
             try:
-                page.wait_for_selector("div#new-react-product-details", timeout=15000)
-                print("-> Succès : div#new-react-product-details chargée sur la page finale !")
-            except Exception:
-                print("-> Attention : div#new-react-product-details absente sur cette page.")
+                raw_json = react_div["data-graphql-response"]
+                data = json.loads(raw_json)
 
-            html_content = page.content()
-            soup = BeautifulSoup(html_content, 'html.parser')
+                if "name" in data:
+                    title = data["name"]
+                elif "product" in data and isinstance(data["product"], dict) and "name" in data["product"]:
+                    title = data["product"]["name"]
 
-            react_div = soup.select_one("div#new-react-product-details")
-            if react_div and react_div.has_attr("data-graphql-response"):
-                try:
-                    raw_json = react_div["data-graphql-response"]
-                    data = json.loads(raw_json)
+                for k in ["release_date", "releaseDate", "date_parution", "parution"]:
+                    if k in data and data[k]:
+                        date_commercialisation = str(data[k])
+                        break
 
-                    if "name" in data:
-                        title = data["name"]
-                    elif "product" in data and isinstance(data["product"], dict) and "name" in data["product"]:
-                        title = data["product"]["name"]
-
+                if date_commercialisation == "Inconnue" and "product" in data and isinstance(data["product"], dict):
                     for k in ["release_date", "releaseDate", "date_parution", "parution"]:
-                        if k in data and data[k]:
-                            date_commercialisation = str(data[k])
+                        if k in data["product"] and data["product"][k]:
+                            date_commercialisation = str(data["product"][k])
                             break
 
-                    if date_commercialisation == "Inconnue" and "product" in data and isinstance(data["product"], dict):
-                        for k in ["release_date", "releaseDate", "date_parution", "parution"]:
-                            if k in data["product"] and data["product"][k]:
-                                date_commercialisation = str(data["product"][k])
-                                break
+                print(f"-> Succès extraction -> Titre : {title}")
+            except Exception as json_err:
+                print("-> Erreur parsing JSON :", json_err)
 
-                    print(f"-> Extraction réussie -> Titre : {title} | Date : {date_commercialisation}")
+        if date_commercialisation != "Inconnue" and len(date_commercialisation) >= 10:
+            date_commercialisation = date_commercialisation[:10]
 
-                except Exception as json_err:
-                    print("-> Erreur parsing JSON :", json_err)
+        img_el = soup.select_one("img.square__img") or soup.select_one(".pdp-gallery img")
+        if img_el and img_el.get("src"):
+            cover_url = img_el["src"]
 
-            if date_commercialisation != "Inconnue" and len(date_commercialisation) >= 10:
-                date_commercialisation = date_commercialisation[:10]
-
-            img_el = soup.select_one("img.square__img") or soup.select_one(".pdp-gallery img")
-            if img_el and img_el.get("src"):
-                cover_url = img_el["src"]
-
-            browser.close()
-
-            return {
-                "title": title,
-                "cover_url": cover_url,
-                "date": date_commercialisation,
-                "ean": ean
-            }
+        return {
+            "title": title,
+            "cover_url": cover_url,
+            "date": date_commercialisation,
+            "ean": ean
+        }
 
     except Exception as e:
         print("-> ERREUR CRITIQUE :", str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
-
 if __name__ == "__main__":
-    import uvicorn
+    importuvicorn
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
