@@ -100,8 +100,9 @@ def get_cultura_book(ean: str):
             "resolved_url": target_product_url
         }
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+   except Exception as e:
+        print("-> ERREUR CRITIQUE :", str(e))
+        raise HTTPException(status_code=500, detail=f"Erreur Python : {str(e)}")
 
 
 if __name__ == "__main__":
