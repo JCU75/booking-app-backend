@@ -19,92 +19,106 @@ ZENROWS_API_KEY = os.environ.get("ZENROWS_API_KEY")
 
 @app.get("/get-book/{ean}")
 def get_cultura_book(ean: str):
-    target_url = f"https://www.cultura.com/search/results?search_query={ean}"
-    
+    search_url = f"https://www.cultura.com/search/results?search_query={ean}"
+    print(f"\n--- RECHERCHE POUR EAN : {ean} ---")
+
     title = "Titre non trouvé"
     date_commercialisation = "Inconnue"
     cover_url = ""
-    target_product_url = target_url
+    product_url = None
 
     try:
-        # 1. Appel de la page de recherche en attendant 'a.one-product' via ZenRows
-        zenrows_url = f"https://api.zenrows.com/v1/?apikey={ZENROWS_API_KEY}&url={target_url}&js_render=true&premium_proxy=true&wait_for=a.one-product"
-        response = requests.get(zenrows_url, timeout=60)
+        # ÉTAPE 1 : Récupérer la page de recherche via ZenRows en attendant a.one-product
+        zenrows_search_url = f"https://api.zenrows.com/v1/?apikey={ZENROWS_API_KEY}&url={search_url}&js_render=true&premium_proxy=true&wait_for=a.one-product"
+        response = requests.get(zenrows_search_url, timeout=60)
         
         if response.status_code != 200:
             raise HTTPException(status_code=500, detail="Erreur ZenRows recherche")
 
-        soup = BeautifulSoup(response.text, 'html.parser')
+        soup_search = BeautifulSoup(response.text, 'html.parser')
 
-        # 2. Récupération directe du lien du premier produit comme dans ton script Playwright
-        product_link_el = soup.select_one("a.one-product")
-        product_url = product_link_el['href'] if product_link_el and product_link_el.has_attr('href') else None
+        # Récupération du lien du premier produit (exactement comme dans Playwright)
+        product_link_el = soup_search.select_one("a.one-product")
+        if product_link_el and product_link_el.has_attr("href"):
+            product_url = product_link_el["href"]
+            print(f"-> Lien produit détecté : {product_url}")
+        else:
+            print("-> Attention : Aucun élément 'a.one-product' trouvé sur la page de recherche.")
 
+        # Gestion de l'URL absolue/relative
         if product_url:
-            if product_url.startswith('/'):
-                target_product_url = f"https://www.cultura.com{product_url}"
-            else:
-                target_product_url = product_url
+            if product_url.startswith("/"):
+                product_url = f"https://www.cultura.com{product_url}"
+            print(f"-> Navigation directe vers la page produit : {product_url}")
+        else:
+            # Fallback direct basé sur l'EAN si la recherche échoue
+            product_url = f"https://www.cultura.com/search/results?search_query={ean}"
 
-            # 3. Navigation directe vers la page produit, en attendant le chargement de la div #new-react-product-details
-            prod_zenrows_url = f"https://api.zenrows.com/v1/?apikey={ZENROWS_API_KEY}&url={target_product_url}&js_render=true&premium_proxy=true&wait_for=%23new-react-product-details"
-            prod_response = requests.get(prod_zenrows_url, timeout=60)
-            if prod_response.status_code == 200:
-                soup = BeautifulSoup(prod_response.text, 'html.parser')
+        # ÉTAPE 2 : Récupérer la page produit finale via ZenRows en attendant div#new-react-product-details
+        zenrows_product_url = f"https://api.zenrows.com/v1/?apikey={ZENROWS_API_KEY}&url={product_url}&js_render=true&premium_proxy=true&wait_for=%23new-react-product-details"
+        prod_response = requests.get(zenrows_product_url, timeout=60)
+        
+        if prod_response.status_code != 200:
+            raise HTTPException(status_code=500, detail="Erreur ZenRows page produit")
 
-        # 4. Extraction du JSON interne de la div #new-react-product-details
-        react_div = soup.find('div', id='new-react-product-details')
-        if react_div and react_div.has_attr('data-graphql-response'):
+        soup_prod = BeautifulSoup(prod_response.text, 'html.parser')
+
+        # ÉTAPE 3 : Extraction via le JSON GraphQL de la div (exactement comme ton code)
+        react_div = soup_prod.select_one("div#new-react-product-details")
+        if react_div and react_div.has_attr("data-graphql-response"):
             try:
-                raw_json = react_div['data-graphql-response']
-                graphql_data = json.loads(raw_json)
-                
-                if graphql_data.get('name'):
-                    title = graphql_data.get('name')
-                
-                # Recherche de l'image dans les différentes clés possibles du JSON
-                for img_key in ['image', 'cover', 'imageUrl', 'kit_image', 'pictures', 'media']:
-                    img_val = graphql_data.get(img_key)
-                    if img_val:
-                        if isinstance(img_val, str):
-                            cover_url = img_val
-                            break
-                        elif isinstance(img_val, dict):
-                            cover_url = img_val.get('url', '') or img_val.get('large', '')
-                            if cover_url:
-                                break
-                        elif isinstance(img_val, list) and len(img_val) > 0:
-                            cover_url = img_val[0] if isinstance(img_val[0], str) else img_val[0].get('url', '')
-                            break
-                
-                # Recherche de la date
-                for date_key in ['releaseDate', 'datePublished', 'publicationDate', 'created_at']:
-                    if graphql_data.get(date_key):
-                        date_commercialisation = graphql_data.get(date_key)
+                raw_json = react_div["data-graphql-response"]
+                data = json.loads(raw_json)
+
+                # 1. Titre
+                if "name" in data:
+                    title = data["name"]
+                elif "product" in data and isinstance(data["product"], dict) and "name" in data["product"]:
+                    title = data["product"]["name"]
+
+                # 2. Date de commercialisation
+                for k in ["release_date", "releaseDate", "date_parution", "parution"]:
+                    if k in data and data[k]:
+                        date_commercialisation = str(data[k])
                         break
-            except Exception as e:
-                print("Erreur parsing GraphQL JSON:", str(e))
 
-        # 5. Fallback sur les méta-tags si l'image n'a pas été trouvée dans le JSON
-        if not cover_url:
-            og_image = soup.find('meta', property='og:image')
-            if og_image and og_image.get('content'):
-                cover_url = og_image['content']
+                if date_commercialisation == "Inconnue" and "product" in data and isinstance(data["product"], dict):
+                    for k in ["release_date", "releaseDate", "date_parution", "parution"]:
+                        if k in data["product"] and data["product"][k]:
+                            date_commercialisation = str(data["product"][k])
+                            break
 
+                print(f"-> Extraction réussie -> Titre : {title} | Date : {date_commercialisation}")
+
+            except Exception as json_err:
+                print("-> Erreur parsing JSON :", json_err)
+
+        # Nettoyage de la date
         if date_commercialisation != "Inconnue" and len(date_commercialisation) >= 10:
             date_commercialisation = date_commercialisation[:10]
+
+        # 4. Extraction de la jaquette
+        img_el = soup_prod.select_one("img.square__img") or soup_prod.select_one(".pdp-gallery img")
+        if img_el and img_el.get("src"):
+            cover_url = img_el["src"]
+        
+        # Fallback méta image si l'élément HTML n'est pas trouvé
+        if not cover_url:
+            og_img = soup_prod.find('meta', property='og:image')
+            if og_img and og_img.get('content'):
+                cover_url = og_img['content']
 
         return {
             "title": title,
             "cover_url": cover_url,
             "date": date_commercialisation,
             "ean": ean,
-            "resolved_url": target_product_url
+            "resolved_url": product_url
         }
 
     except Exception as e:
         print("-> ERREUR CRITIQUE :", str(e))
-        raise HTTPException(status_code=500, detail=f"Erreur Python : {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn
