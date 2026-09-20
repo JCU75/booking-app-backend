@@ -26,24 +26,49 @@ def get_cultura_book(ean: str):
     cover_url = ""
 
     try:
+        # 1. Appel de la page de recherche
         zenrows_url = f"https://api.zenrows.com/v1/?apikey={ZENROWS_API_KEY}&url={target_url}&js_render=true&premium_proxy=true"
         response = requests.get(zenrows_url, timeout=60)
         
         if response.status_code != 200:
-            raise HTTPException(status_code=500, detail="Erreur ZenRows")
+            raise HTTPException(status_code=500, detail="Erreur ZenRows recherche")
 
         soup = BeautifulSoup(response.text, 'html.parser')
 
-        # Recherche des blocs de données structurées JSON-LD
+        # 2. Chercher le premier lien produit dans les résultats de recherche
+        # Sur Cultura, les liens de produits dans la recherche ont souvent une classe spécifique ou un href vers .html
+        product_link = None
+        for a in soup.find_all('a', href=True):
+            href = a['href']
+            # On cherche un lien produit typique (qui contient .html et souvent pas juste /search)
+            if href.endswith('.html') and '/search' not in href and ('-' in href or 'livre' in href):
+                product_link = href
+                break
+
+        target_product_url = target_url
+        if product_link:
+            if product_link.startswith('/'):
+                target_product_url = f"https://www.cultura.com{product_link}"
+            else:
+                target_product_url = product_link
+
+            # 3. Si on a trouvé un lien produit spécifique, on l'interroge via ZenRows
+            prod_zenrows_url = f"https://api.zenrows.com/v1/?apikey={ZENROWS_API_KEY}&url={target_product_url}&js_render=true&premium_proxy=true"
+            prod_response = requests.get(prod_zenrows_url, timeout=60)
+            if prod_response.status_code == 200:
+                soup = BeautifulSoup(prod_response.text, 'html.parser')
+
+        # 4. Extraction via JSON-LD sur la page finale (produit ou recherche)
         json_lds = soup.find_all('script', type='application/ld+json')
         for script in json_lds:
+            if not script.string:
+                continue
             try:
                 data = json.loads(script.string)
-                # Parfois le JSON-LD est une liste d'objets
                 items = data if isinstance(data, list) else [data]
                 for item in items:
                     if item.get("@type") in ["Book", "Product"] or "name" in item:
-                        if title == "Titre non trouvé" and item.get("name"):
+                        if title == "Titre non trouvé" and item.get("name") and item.get("name") != "Cultura":
                             title = item.get("name")
                         if not cover_url and item.get("image"):
                             img = item.get("image")
@@ -53,10 +78,10 @@ def get_cultura_book(ean: str):
             except Exception:
                 continue
 
-        # Fallback sur les balises og: meta si besoin
+        # Fallback si le titre est toujours introuvable
         if title == "Titre non trouvé":
             og_title = soup.find('meta', property='og:title')
-            if og_title and og_title.get('content'):
+            if og_title and og_title.get('content') and og_title['content'] != "Résultats de recherche":
                 title = og_title['content']
 
         if not cover_url:
@@ -71,7 +96,8 @@ def get_cultura_book(ean: str):
             "title": title,
             "cover_url": cover_url,
             "date": date_commercialisation,
-            "ean": ean
+            "ean": ean,
+            "resolved_url": target_product_url
         }
 
     except Exception as e:
