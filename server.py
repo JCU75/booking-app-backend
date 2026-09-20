@@ -16,46 +16,22 @@ app.add_middleware(
 )
 
 ZENROWS_API_KEY = os.environ.get("ZENROWS_API_KEY")
+
 @app.get("/get-book/{ean}")
 def get_cultura_book(ean: str):
     target_url = f"https://www.cultura.com/search/results?search_query={ean}"
-    
-    title = "Titre non trouvé"
-    date_commercialisation = "Inconnue"
-    cover_url = ""
-
     try:
         zenrows_url = f"https://api.zenrows.com/v1/?apikey={ZENROWS_API_KEY}&url={target_url}&js_render=true"
         response = requests.get(zenrows_url, timeout=60)
         
-        if response.status_code != 200:
-            raise HTTPException(status_code=500, detail=f"Erreur ZenRows status: {response.status_code}")
-
-        soup = BeautifulSoup(response.text, 'html.parser')
-
-        # Diagnostic : est-ce qu'on trouve des éléments sur la page ?
-        # On va regarder si le titre de la page HTML correspond à quelque chose de cohérent
-        page_title_tag = soup.find('title')
-        html_title = page_title_tag.text if page_title_tag else "Pas de balise title"
-
-        react_div = soup.select_one("div#new-react-product-details")
-        
-        # Si pas de react_div direct, testons le premier lien produit
-        product_link = soup.select_one("a.one-product")
-        product_url_found = product_link.get("href") if product_link else "Aucun a.one-product trouvé"
-
+        # On retourne un extrait des premiers 1500 caractères du texte brut de la page
         return {
-            "debug_html_title": html_title,
-            "debug_product_url_found": product_url_found,
-            "has_react_div": react_div is not None,
-            "title": title,
-            "cover_url": cover_url,
-            "date": date_commercialisation,
-            "ean": ean
+            "status_code": response.status_code,
+            "html_snippet": response.text[:1500]
         }
-
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 if __name__ == "__main__":
     importuvicorn
