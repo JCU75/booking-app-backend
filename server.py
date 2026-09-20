@@ -27,7 +27,7 @@ def get_cultura_book(ean: str):
     target_product_url = target_url
 
     try:
-        # 1. Appel de la page de recherche
+        # 1. Appel de la page de recherche avec ZenRows
         zenrows_url = f"https://api.zenrows.com/v1/?apikey={ZENROWS_API_KEY}&url={target_url}&js_render=true&premium_proxy=true"
         response = requests.get(zenrows_url, timeout=60)
         
@@ -36,19 +36,27 @@ def get_cultura_book(ean: str):
 
         soup = BeautifulSoup(response.text, 'html.parser')
 
-        # 2. Chercher un vrai lien produit (excluant strictement les catégories)
+        # 2. Chercher un lien produit de manière ultra-précise
         product_link = None
         for a in soup.find_all('a', href=True):
             href = a['href']
-            # On élimine toutes les pages génériques connues
-            if href in ['/livre.html', '/ebook.html', '/livre/livre-occasion.html', '/livre/coups-de-coeur-livre.html', '/livre/meilleures-ventes-livre.html', '/livre/nouveautes-livre.html', '/livre/precommandes-livre.html']:
-                continue
             
-            # Un lien produit valide sur Cultura contient .html, des tirets (slug du titre) et un nom de fichier long
-            if href.endswith('.html') and '/search' not in href and '-' in href:
+            # Liste noire stricte des pages génériques, promos et catégories
+            exclus = [
+                '/livre.html', '/ebook.html', '/les-promotions/', 
+                '/livre/livre-occasion.html', '/livre/coups-de-coeur-livre.html', 
+                '/livre/meilleures-ventes-livre.html', '/livre/nouveautes-livre.html', 
+                '/livre/precommandes-livre.html', '/search'
+            ]
+            
+            if any(ex in href for ex in exclus):
+                continue
+                
+            # Un lien produit valide sur Cultura se termine par .html, contient des tirets et un ID numérique
+            if href.endswith('.html') and '-' in href:
                 filename = href.split('/')[-1]
-                # Un vrai produit a un nom de fichier long (slug + code)
-                if len(filename) > 15:
+                # Un vrai produit a un nom long (slug + ID unique)
+                if len(filename) > 20 and any(char.isdigit() for char in filename):
                     product_link = href
                     break
 
@@ -74,8 +82,9 @@ def get_cultura_book(ean: str):
                 items = data if isinstance(data, list) else [data]
                 for item in items:
                     if item.get("@type") in ["Book", "Product"] or "name" in item:
-                        if title == "Titre non trouvé" and item.get("name") and item.get("name") not in ["Cultura", "Résultats de recherche", "Livre"]:
-                            title = item.get("name")
+                        item_name = item.get("name")
+                        if title == "Titre non trouvé" and item_name and item_name not in ["Cultura", "Résultats de recherche", "Livre", "Promotions Ebook"]:
+                            title = item_name
                         if not cover_url and item.get("image"):
                             img = item.get("image")
                             cover_url = img[0] if isinstance(img, list) else img
@@ -87,8 +96,10 @@ def get_cultura_book(ean: str):
         # Fallbacks ciblés
         if title == "Titre non trouvé":
             og_title = soup.find('meta', property='og:title')
-            if og_title and og_title.get('content') and og_title['content'] not in ["Résultats de recherche", "Cultura", "Livre"]:
-                title = og_title['content']
+            if og_title and og_title.get('content'):
+                content = og_title['content']
+                if content not in ["Résultats de recherche", "Cultura", "Livre", "Promotions Ebook"]:
+                    title = content
 
         if not cover_url:
             og_image = soup.find('meta', property='og:image')
