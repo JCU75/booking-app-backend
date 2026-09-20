@@ -24,6 +24,7 @@ def get_cultura_book(ean: str):
     title = "Titre non trouvé"
     date_commercialisation = "Inconnue"
     cover_url = ""
+    target_product_url = target_url
 
     try:
         # 1. Appel de la page de recherche
@@ -36,16 +37,13 @@ def get_cultura_book(ean: str):
         soup = BeautifulSoup(response.text, 'html.parser')
 
         # 2. Chercher le premier lien produit dans les résultats de recherche
-        # Sur Cultura, les liens de produits dans la recherche ont souvent une classe spécifique ou un href vers .html
         product_link = None
         for a in soup.find_all('a', href=True):
             href = a['href']
-            # On cherche un lien produit typique (qui contient .html et souvent pas juste /search)
             if href.endswith('.html') and '/search' not in href and ('-' in href or 'livre' in href):
                 product_link = href
                 break
 
-        target_product_url = target_url
         if product_link:
             if product_link.startswith('/'):
                 target_product_url = f"https://www.cultura.com{product_link}"
@@ -100,12 +98,11 @@ def get_cultura_book(ean: str):
             "resolved_url": target_product_url
         }
 
-   except Exception as e:
+    except Exception as e:
         print("-> ERREUR CRITIQUE :", str(e))
         raise HTTPException(status_code=500, detail=f"Erreur Python : {str(e)}")
 
-
 if __name__ == "__main__":
-    importuvicorn
+    import uvicorn
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
