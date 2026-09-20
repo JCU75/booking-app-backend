@@ -36,14 +36,19 @@ def get_cultura_book(ean: str):
 
         soup = BeautifulSoup(response.text, 'html.parser')
 
-        # 2. Chercher un vrai lien produit de manière plus stricte
+        # 2. Chercher un vrai lien produit (excluant strictement les catégories)
         product_link = None
         for a in soup.find_all('a', href=True):
             href = a['href']
-            # On cherche un lien qui finit par .html mais qui contient des chiffres ou un format de produit (ex: pas juste /livre.html)
-            if href.endswith('.html') and '/search' not in href and href != '/livre.html' and ('-' in href or any(char.isdigit() for char in href)):
-                # On évite les liens de catégories génériques
-                if not any(cat in href for cat in ['/univers-', '/le-magasin', '/aide/', '/evenement']):
+            # On élimine toutes les pages génériques connues
+            if href in ['/livre.html', '/ebook.html', '/livre/livre-occasion.html', '/livre/coups-de-coeur-livre.html', '/livre/meilleures-ventes-livre.html', '/livre/nouveautes-livre.html', '/livre/precommandes-livre.html']:
+                continue
+            
+            # Un lien produit valide sur Cultura contient .html, des tirets (slug du titre) et un nom de fichier long
+            if href.endswith('.html') and '/search' not in href and '-' in href:
+                filename = href.split('/')[-1]
+                # Un vrai produit a un nom de fichier long (slug + code)
+                if len(filename) > 15:
                     product_link = href
                     break
 
@@ -69,7 +74,7 @@ def get_cultura_book(ean: str):
                 items = data if isinstance(data, list) else [data]
                 for item in items:
                     if item.get("@type") in ["Book", "Product"] or "name" in item:
-                        if title == "Titre non trouvé" and item.get("name") and item.get("name") not in ["Cultura", "Résultats de recherche"]:
+                        if title == "Titre non trouvé" and item.get("name") and item.get("name") not in ["Cultura", "Résultats de recherche", "Livre"]:
                             title = item.get("name")
                         if not cover_url and item.get("image"):
                             img = item.get("image")
@@ -82,7 +87,7 @@ def get_cultura_book(ean: str):
         # Fallbacks ciblés
         if title == "Titre non trouvé":
             og_title = soup.find('meta', property='og:title')
-            if og_title and og_title.get('content') and og_title['content'] not in ["Résultats de recherche", "Cultura"]:
+            if og_title and og_title.get('content') and og_title['content'] not in ["Résultats de recherche", "Cultura", "Livre"]:
                 title = og_title['content']
 
         if not cover_url:
