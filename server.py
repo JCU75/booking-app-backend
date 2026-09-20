@@ -36,21 +36,19 @@ def get_cultura_book(ean: str):
 
         soup = BeautifulSoup(response.text, 'html.parser')
 
-        # 2. Règle stricte : Chercher en priorité absolue un lien qui contient l'EAN dans son URL ou son voisinage
+        # 2. Règle stricte : Chercher le lien contenant l'EAN
         product_link = None
         for a in soup.find_all('a', href=True):
             href = a['href']
-            # Si l'EAN exact est dans le lien ou le parent immédiat, c'est obligatoirement le bon produit
             if ean in href:
                 product_link = href
                 break
 
-        # Si on ne trouve pas l'EAN dans l'URL, on cherche un lien produit qui ne soit ni une liseuse, ni une promo, ni une catégorie
+        # Fallback de sélection si l'EAN n'est pas directement dans l'URL du lien
         if not product_link:
             for a in soup.find_all('a', href=True):
                 href = a['href']
                 if href.endswith('.html') and '-' in href:
-                    # Exclusions strictes des bannières, liseuses et catégories
                     if any(ex in href for ex in ['/liseuse', 'liseuse-', 'ebook', 'univers-', 'promotions', 'livre-occasion', 'coups-de-coeur', 'meilleures-ventes', 'nouveautes', 'precommandes', 'enfants', '/search']):
                         continue
                     filename = href.split('/')[-1]
@@ -70,7 +68,7 @@ def get_cultura_book(ean: str):
             if prod_response.status_code == 200:
                 soup = BeautifulSoup(prod_response.text, 'html.parser')
 
-        # 4. Extraction via JSON-LD sur la page finale
+        # 4. Extraction robuste via JSON-LD sur la page finale
         json_lds = soup.find_all('script', type='application/ld+json')
         for script in json_lds:
             if not script.string:
@@ -81,29 +79,42 @@ def get_cultura_book(ean: str):
                 for item in items:
                     if item.get("@type") in ["Book", "Product"] or "name" in item:
                         item_name = item.get("name")
-                        # S'assurer que le nom n'est pas un titre générique de site ou de pub
-                        if title == "Titre non trouvé" and item_name and item_name not in ["Cultura", "Résultats de recherche", "Livre", "Liseuse Vivlio Inkpad 4"]:
+                        if title == "Titre non trouvé" and item_name and item_name not in ["Cultura", "Résultats de recherche", "Livre"]:
                             title = item_name
-                        if not cover_url and item.get("image"):
-                            img = item.get("image")
-                            cover_url = img[0] if isinstance(img, list) else img
-                        if date_commercialisation == "Inconnue" and (item.get("releaseDate") or item.get("datePublished")):
-                            date_commercialisation = item.get("releaseDate") or item.get("datePublished")
+                        
+                        # Extraction robuste de l'image (chaîne de caractères, liste ou dictionnaire)
+                        if not cover_url:
+                            img_data = item.get("image")
+                            if isinstance(img_data, list) and len(img_data) > 0:
+                                cover_url = img_data[0] if isinstance(img_data[0], str) else img_data[0].get("url", "")
+                            elif isinstance(img_data, dict):
+                                cover_url = img_data.get("url", "")
+                            elif isinstance(img_data, str):
+                                cover_url = img_data
+
+                        # Extraction robuste de la date
+                        if date_commercialisation == "Inconnue":
+                            for d_key in ["releaseDate", "datePublished", "dateCreated"]:
+                                if item.get(d_key):
+                                    date_commercialisation = item.get(d_key)
+                                    break
             except Exception:
                 continue
 
-        # Fallbacks ciblés
+        # Fallbacks par balises Meta si le JSON-LD n'a pas tout suffi
         if title == "Titre non trouvé":
             og_title = soup.find('meta', property='og:title')
             if og_title and og_title.get('content'):
                 content = og_title['content']
-                if content not in ["Résultats de recherche", "Cultura", "Livre", "Liseuse Vivlio Inkpad 4"]:
+                if content not in ["Résultats de recherche", "Cultura", "Livre"]:
                     title = content
 
         if not cover_url:
-            og_image = soup.find('meta', property='og:image')
-            if og_image and og_image.get('content'):
-                cover_url = og_image['content']
+            for meta_attr in [{"property": "og:image"}, {"name": "twitter:image"}]:
+                og_image = soup.find('meta', attrs=meta_attr)
+                if og_image and og_image.get('content'):
+                    cover_url = og_image['content']
+                    break
 
         if date_commercialisation != "Inconnue" and len(date_commercialisation) >= 10:
             date_commercialisation = date_commercialisation[:10]
