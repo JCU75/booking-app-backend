@@ -27,13 +27,33 @@ def get_cultura_book(ean: str):
 
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            page = browser.new_page()
-            page.goto(search_url, timeout=20000)
+            # Lancement avec des arguments pour masquer l'automatisation
+            browser = p.chromium.launch(
+                headless=True,
+                args=[
+                    "--disable-blink-features=AutomationControlled",
+                    "--no-sandbox",
+                    "--disable-setuid-sandbox"
+                ]
+            )
+            
+            # Contexte simulant un vrai utilisateur (Chrome sur Windows)
+            context = browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                viewport={"width": 1920, "height": 1080},
+                locale="fr-FR"
+            )
+            
+            page = context.new_page()
+            
+            # Script anti-détection pour masquer le flag webdriver
+            page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+
+            page.goto(search_url, timeout=25000)
 
             product_url = None
             try:
-                page.wait_for_selector("a.one-product", timeout=10000)
+                page.wait_for_selector("a.one-product", timeout=12000)
                 product_link_el = page.locator("a.one-product").first
                 product_url = product_link_el.get_attribute("href")
                 print(f"-> Lien produit détecté : {product_url}")
@@ -45,7 +65,7 @@ def get_cultura_book(ean: str):
                     product_url = f"https://www.cultura.com{product_url}"
 
                 print(f"-> Navigation directe vers la page produit : {product_url}")
-                page.goto(product_url, timeout=20000)
+                page.goto(product_url, timeout=25000)
             else:
                 try:
                     page.locator("a.one-product").first.click(timeout=5000)
