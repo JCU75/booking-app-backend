@@ -21,7 +21,7 @@ ZENROWS_API_KEY = os.environ.get("ZENROWS_API_KEY")
 def get_cultura_book(ean: str):
     target_url = f"https://www.cultura.com/search/results?search_query={ean}"
     try:
-        zenrows_url = f"https://api.zenrows.com/v1/?apikey={ZENROWS_API_KEY}&url={target_url}&js_render=true"
+        zenrows_url = f"https://api.zenrows.com/v1/?apikey={ZENROWS_API_KEY}&url={target_url}&js_render=true&premium_proxy=true"
         response = requests.get(zenrows_url, timeout=60)
         
         # On retourne un extrait des premiers 1500 caractères du texte brut de la page
