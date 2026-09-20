@@ -36,27 +36,32 @@ def get_cultura_book(ean: str):
 
         soup = BeautifulSoup(response.text, 'html.parser')
 
-        # 2. Chercher un lien produit de manière ultra-précise
+        # 2. Recherche ciblée du premier lien produit dans les blocs de résultats de recherche de Cultura
+        # Les cartes produits sur Cultura ont généralement des classes spécifiques ou se trouvent dans des conteneurs de grille
         product_link = None
+        
+        # On cherche d'abord des liens situés dans des éléments de liste de produits ou cartes
+        # Sur beaucoup de sites e-commerce modernes, les liens produits ont l'EAN ou un pattern précis dans l'URL, 
+        # ou sont les premiers liens valides qui ne sont pas des catégories.
         for a in soup.find_all('a', href=True):
             href = a['href']
             
-            # Liste noire stricte des pages génériques, promos et catégories
+            # Exclusion stricte des bannières, univers, catégories et promos
             exclus = [
-                '/livre.html', '/ebook.html', '/les-promotions/', 
-                '/livre/livre-occasion.html', '/livre/coups-de-coeur-livre.html', 
-                '/livre/meilleures-ventes-livre.html', '/livre/nouveautes-livre.html', 
-                '/livre/precommandes-livre.html', '/search'
+                '/livre.html', '/ebook.html', '/les-promotions/', '/univers-', 
+                'livre-occasion', 'coups-de-coeur', 'meilleures-ventes', 'nouveautes', 
+                'precommandes', 'livres-des-', 'enfants', 'bebe', '/search'
             ]
             
             if any(ex in href for ex in exclus):
                 continue
                 
-            # Un lien produit valide sur Cultura se termine par .html, contient des tirets et un ID numérique
+            # Un lien produit de livre sur Cultura contient obligatoirement du texte en minuscules avec des tirets 
+            # et se termine par .html, avec un identifiant numérique à la fin (ex: ...-9782...html ou similaire)
             if href.endswith('.html') and '-' in href:
                 filename = href.split('/')[-1]
-                # Un vrai produit a un nom long (slug + ID unique)
-                if len(filename) > 20 and any(char.isdigit() for char in filename):
+                # Le nom de fichier d'un livre contient sa référence ou un long slug unique
+                if len(filename) > 30:
                     product_link = href
                     break
 
@@ -83,7 +88,7 @@ def get_cultura_book(ean: str):
                 for item in items:
                     if item.get("@type") in ["Book", "Product"] or "name" in item:
                         item_name = item.get("name")
-                        if title == "Titre non trouvé" and item_name and item_name not in ["Cultura", "Résultats de recherche", "Livre", "Promotions Ebook"]:
+                        if title == "Titre non trouvé" and item_name and item_name not in ["Cultura", "Résultats de recherche", "Livre", "Promotions Ebook", "Livres pour enfants de 3 à 5 ans"]:
                             title = item_name
                         if not cover_url and item.get("image"):
                             img = item.get("image")
@@ -98,7 +103,7 @@ def get_cultura_book(ean: str):
             og_title = soup.find('meta', property='og:title')
             if og_title and og_title.get('content'):
                 content = og_title['content']
-                if content not in ["Résultats de recherche", "Cultura", "Livre", "Promotions Ebook"]:
+                if content not in ["Résultats de recherche", "Cultura", "Livre", "Promotions Ebook", "Livres pour enfants de 3 à 5 ans"]:
                     title = content
 
         if not cover_url:
