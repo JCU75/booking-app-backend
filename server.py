@@ -36,13 +36,16 @@ def get_cultura_book(ean: str):
 
         soup = BeautifulSoup(response.text, 'html.parser')
 
-        # 2. Chercher le premier lien produit dans les résultats de recherche
+        # 2. Chercher un vrai lien produit de manière plus stricte
         product_link = None
         for a in soup.find_all('a', href=True):
             href = a['href']
-            if href.endswith('.html') and '/search' not in href and ('-' in href or 'livre' in href):
-                product_link = href
-                break
+            # On cherche un lien qui finit par .html mais qui contient des chiffres ou un format de produit (ex: pas juste /livre.html)
+            if href.endswith('.html') and '/search' not in href and href != '/livre.html' and ('-' in href or any(char.isdigit() for char in href)):
+                # On évite les liens de catégories génériques
+                if not any(cat in href for cat in ['/univers-', '/le-magasin', '/aide/', '/evenement']):
+                    product_link = href
+                    break
 
         if product_link:
             if product_link.startswith('/'):
@@ -50,13 +53,13 @@ def get_cultura_book(ean: str):
             else:
                 target_product_url = product_link
 
-            # 3. Si on a trouvé un lien produit spécifique, on l'interroge via ZenRows
+            # 3. Interroger la vraie page produit
             prod_zenrows_url = f"https://api.zenrows.com/v1/?apikey={ZENROWS_API_KEY}&url={target_product_url}&js_render=true&premium_proxy=true"
             prod_response = requests.get(prod_zenrows_url, timeout=60)
             if prod_response.status_code == 200:
                 soup = BeautifulSoup(prod_response.text, 'html.parser')
 
-        # 4. Extraction via JSON-LD sur la page finale (produit ou recherche)
+        # 4. Extraction via JSON-LD sur la page finale
         json_lds = soup.find_all('script', type='application/ld+json')
         for script in json_lds:
             if not script.string:
@@ -66,7 +69,7 @@ def get_cultura_book(ean: str):
                 items = data if isinstance(data, list) else [data]
                 for item in items:
                     if item.get("@type") in ["Book", "Product"] or "name" in item:
-                        if title == "Titre non trouvé" and item.get("name") and item.get("name") != "Cultura":
+                        if title == "Titre non trouvé" and item.get("name") and item.get("name") not in ["Cultura", "Résultats de recherche"]:
                             title = item.get("name")
                         if not cover_url and item.get("image"):
                             img = item.get("image")
@@ -76,10 +79,10 @@ def get_cultura_book(ean: str):
             except Exception:
                 continue
 
-        # Fallback si le titre est toujours introuvable
+        # Fallbacks ciblés
         if title == "Titre non trouvé":
             og_title = soup.find('meta', property='og:title')
-            if og_title and og_title.get('content') and og_title['content'] != "Résultats de recherche":
+            if og_title and og_title.get('content') and og_title['content'] not in ["Résultats de recherche", "Cultura"]:
                 title = og_title['content']
 
         if not cover_url:
