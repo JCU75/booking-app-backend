@@ -20,25 +20,60 @@ ZENROWS_API_KEY = os.environ.get("ZENROWS_API_KEY")
 @app.get("/get-book/{ean}")
 def get_cultura_book(ean: str):
     target_url = f"https://www.cultura.com/search/results?search_query={ean}"
+    
+    title = "Titre non trouvé"
+    date_commercialisation = "Inconnue"
+    cover_url = ""
+
     try:
         zenrows_url = f"https://api.zenrows.com/v1/?apikey={ZENROWS_API_KEY}&url={target_url}&js_render=true&premium_proxy=true"
         response = requests.get(zenrows_url, timeout=60)
         
-        html_content = response.text
-        
-        # On vérifie si l'EAN est présent dans le HTML renvoyé
-        ean_present = ean in html_content
-        # On cherche s'il y a un bloc de données react ou json-ld
-        has_json_ld = "application/ld+json" in html_content
-        
+        if response.status_code != 200:
+            raise HTTPException(status_code=500, detail="Erreur ZenRows")
+
+        soup = BeautifulSoup(response.text, 'html.parser')
+
+        # Recherche des blocs de données structurées JSON-LD
+        json_lds = soup.find_all('script', type='application/ld+json')
+        for script in json_lds:
+            try:
+                data = json.loads(script.string)
+                # Parfois le JSON-LD est une liste d'objets
+                items = data if isinstance(data, list) else [data]
+                for item in items:
+                    if item.get("@type") in ["Book", "Product"] or "name" in item:
+                        if title == "Titre non trouvé" and item.get("name"):
+                            title = item.get("name")
+                        if not cover_url and item.get("image"):
+                            img = item.get("image")
+                            cover_url = img[0] if isinstance(img, list) else img
+                        if date_commercialisation == "Inconnue" and (item.get("releaseDate") or item.get("datePublished")):
+                            date_commercialisation = item.get("releaseDate") or item.get("datePublished")
+            except Exception:
+                continue
+
+        # Fallback sur les balises og: meta si besoin
+        if title == "Titre non trouvé":
+            og_title = soup.find('meta', property='og:title')
+            if og_title and og_title.get('content'):
+                title = og_title['content']
+
+        if not cover_url:
+            og_image = soup.find('meta', property='og:image')
+            if og_image and og_image.get('content'):
+                cover_url = og_image['content']
+
+        if date_commercialisation != "Inconnue" and len(date_commercialisation) >= 10:
+            date_commercialisation = date_commercialisation[:10]
+
         return {
-            "status_code": response.status_code,
-            "html_length": len(html_content),
-            "ean_found_in_html": ean_present,
-            "has_json_ld": has_json_ld,
-            # On extrait un morceau un peu plus loin dans le texte (par exemple du caractère 5000 à 7000)
-            "html_middle_snippet": html_content[5000:7000] if len(html_content) > 7000 else "Page trop courte"
+            "title": title,
+            "cover_url": cover_url,
+            "date": date_commercialisation,
+            "ean": ean
         }
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
