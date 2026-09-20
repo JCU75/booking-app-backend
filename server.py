@@ -27,8 +27,8 @@ def get_cultura_book(ean: str):
     target_product_url = target_url
 
     try:
-        # 1. Appel de la page de recherche avec ZenRows
-        zenrows_url = f"https://api.zenrows.com/v1/?apikey={ZENROWS_API_KEY}&url={target_url}&js_render=true&premium_proxy=true"
+        # 1. Appel avec ZenRows en augmentant le wait_for pour laisser le composant web charger les produits
+        zenrows_url = f"https://api.zenrows.com/v1/?apikey={ZENROWS_API_KEY}&url={target_url}&js_render=true&premium_proxy=true&wait_for=wc-plp-layout"
         response = requests.get(zenrows_url, timeout=60)
         
         if response.status_code != 200:
@@ -36,32 +36,23 @@ def get_cultura_book(ean: str):
 
         soup = BeautifulSoup(response.text, 'html.parser')
 
-        # 2. Recherche ciblée du premier lien produit dans les blocs de résultats de recherche de Cultura
-        # Les cartes produits sur Cultura ont généralement des classes spécifiques ou se trouvent dans des conteneurs de grille
+        # 2. Chercher un lien produit qui contient l'EAN ou qui se trouve dans la grille de résultats
         product_link = None
-        
-        # On cherche d'abord des liens situés dans des éléments de liste de produits ou cartes
-        # Sur beaucoup de sites e-commerce modernes, les liens produits ont l'EAN ou un pattern précis dans l'URL, 
-        # ou sont les premiers liens valides qui ne sont pas des catégories.
         for a in soup.find_all('a', href=True):
             href = a['href']
             
-            # Exclusion stricte des bannières, univers, catégories et promos
-            exclus = [
-                '/livre.html', '/ebook.html', '/les-promotions/', '/univers-', 
-                'livre-occasion', 'coups-de-coeur', 'meilleures-ventes', 'nouveautes', 
-                'precommandes', 'livres-des-', 'enfants', 'bebe', '/search'
-            ]
-            
-            if any(ex in href for ex in exclus):
-                continue
+            # On cherche en priorité un lien contenant l'EAN dans l'URL (très courant sur Cultura)
+            if ean in href:
+                product_link = href
+                break
                 
-            # Un lien produit de livre sur Cultura contient obligatoirement du texte en minuscules avec des tirets 
-            # et se termine par .html, avec un identifiant numérique à la fin (ex: ...-9782...html ou similaire)
+            # Sinon, on cherche un lien .html avec un slug long et des chiffres, hors catégories
             if href.endswith('.html') and '-' in href:
+                # Exclure explicitement les bannières et catégories
+                if any(ex in href for ex in ['/livre.html', '/ebook.html', 'livre-occasion', 'coups-de-coeur', 'meilleures-ventes', 'nouveautes', 'precommandes', 'univers-', 'promotions', 'enfants']):
+                    continue
                 filename = href.split('/')[-1]
-                # Le nom de fichier d'un livre contient sa référence ou un long slug unique
-                if len(filename) > 30:
+                if len(filename) > 20 and any(char.isdigit() for char in filename):
                     product_link = href
                     break
 
@@ -88,7 +79,7 @@ def get_cultura_book(ean: str):
                 for item in items:
                     if item.get("@type") in ["Book", "Product"] or "name" in item:
                         item_name = item.get("name")
-                        if title == "Titre non trouvé" and item_name and item_name not in ["Cultura", "Résultats de recherche", "Livre", "Promotions Ebook", "Livres pour enfants de 3 à 5 ans"]:
+                        if title == "Titre non trouvé" and item_name and item_name not in ["Cultura", "Résultats de recherche", "Livre"]:
                             title = item_name
                         if not cover_url and item.get("image"):
                             img = item.get("image")
@@ -98,12 +89,12 @@ def get_cultura_book(ean: str):
             except Exception:
                 continue
 
-        # Fallbacks ciblés
+        # Fallback si le titre est introuvable
         if title == "Titre non trouvé":
             og_title = soup.find('meta', property='og:title')
             if og_title and og_title.get('content'):
                 content = og_title['content']
-                if content not in ["Résultats de recherche", "Cultura", "Livre", "Promotions Ebook", "Livres pour enfants de 3 à 5 ans"]:
+                if content not in ["Résultats de recherche", "Cultura", "Livre"]:
                     title = content
 
         if not cover_url:
