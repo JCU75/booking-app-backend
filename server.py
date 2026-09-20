@@ -36,7 +36,7 @@ def get_cultura_book(ean: str):
 
         soup = BeautifulSoup(response.text, 'html.parser')
 
-        # 2. Règle stricte : Chercher le lien contenant l'EAN
+        # 2. Chercher le lien contenant l'EAN
         product_link = None
         for a in soup.find_all('a', href=True):
             href = a['href']
@@ -44,7 +44,6 @@ def get_cultura_book(ean: str):
                 product_link = href
                 break
 
-        # Fallback de sélection si l'EAN n'est pas directement dans l'URL du lien
         if not product_link:
             for a in soup.find_all('a', href=True):
                 href = a['href']
@@ -63,58 +62,64 @@ def get_cultura_book(ean: str):
                 target_product_url = product_link
 
             # 3. Interroger la vraie page produit
-            prod_zenrows_url = f"https://api.zenrows.com/v1/?apikey={ZENROWS_API_KEY}&url={target_product_url}&js_render=true&premium_proxy=true"
+            prod_zenrows_url = f"https://api.zenrows.com/v1/?apikey={ZENROWS_API_KEY}&url={target_product_url}&js_render=true&premium_proxy=true&wait_for=#new-react-product-details"
             prod_response = requests.get(prod_zenrows_url, timeout=60)
             if prod_response.status_code == 200:
                 soup = BeautifulSoup(prod_response.text, 'html.parser')
 
-        # 4. Extraction robuste via JSON-LD sur la page finale
-        json_lds = soup.find_all('script', type='application/ld+json')
-        for script in json_lds:
-            if not script.string:
-                continue
+        # 4. Extraction prioritaire via la div #new-react-product-details (data-graphql-response)
+        react_div = soup.find('div', id='new-react-product-details')
+        if react_div and react_div.has_attr('data-graphql-response'):
             try:
-                data = json.loads(script.string)
-                items = data if isinstance(data, list) else [data]
-                for item in items:
-                    if item.get("@type") in ["Book", "Product"] or "name" in item:
-                        item_name = item.get("name")
-                        if title == "Titre non trouvé" and item_name and item_name not in ["Cultura", "Résultats de recherche", "Livre"]:
-                            title = item_name
-                        
-                        # Extraction robuste de l'image (chaîne de caractères, liste ou dictionnaire)
-                        if not cover_url:
-                            img_data = item.get("image")
-                            if isinstance(img_data, list) and len(img_data) > 0:
-                                cover_url = img_data[0] if isinstance(img_data[0], str) else img_data[0].get("url", "")
-                            elif isinstance(img_data, dict):
-                                cover_url = img_data.get("url", "")
-                            elif isinstance(img_data, str):
-                                cover_url = img_data
+                raw_json = react_div['data-graphql-response']
+                graphql_data = json.loads(raw_json)
+                
+                # Extraction du titre
+                if graphql_data.get('name'):
+                    title = graphql_data.get('name')
+                
+                # Extraction de l'image (selon la structure de l'objet image ou cover)
+                for img_key in ['image', 'cover', 'imageUrl', 'pictures', 'media']:
+                    if graphql_data.get(img_key):
+                        img_val = graphql_data.get(img_key)
+                        if isinstance(img_val, str):
+                            cover_url = img_val
+                            break
+                        elif isinstance(img_val, list) and len(img_val) > 0:
+                            cover_url = img_val[0] if isinstance(img_val[0], str) else img_val[0].get('url', '')
+                            break
+                        elif isinstance(img_val, dict):
+                            cover_url = img_val.get('url', '')
+                            break
+                
+                # Extraction de la date
+                for date_key in ['releaseDate', 'datePublished', 'publicationDate', 'created_at']:
+                    if graphql_data.get(date_key):
+                        date_commercialisation = graphql_data.get(date_key)
+                        break
+            except Exception as e:
+                print("Erreur parsing GraphQL JSON:", str(e))
 
-                        # Extraction robuste de la date
-                        if date_commercialisation == "Inconnue":
-                            for d_key in ["releaseDate", "datePublished", "dateCreated"]:
-                                if item.get(d_key):
-                                    date_commercialisation = item.get(d_key)
-                                    break
-            except Exception:
-                continue
-
-        # Fallbacks par balises Meta si le JSON-LD n'a pas tout suffi
-        if title == "Titre non trouvé":
-            og_title = soup.find('meta', property='og:title')
-            if og_title and og_title.get('content'):
-                content = og_title['content']
-                if content not in ["Résultats de recherche", "Cultura", "Livre"]:
-                    title = content
-
-        if not cover_url:
-            for meta_attr in [{"property": "og:image"}, {"name": "twitter:image"}]:
-                og_image = soup.find('meta', attrs=meta_attr)
-                if og_image and og_image.get('content'):
-                    cover_url = og_image['content']
-                    break
+        # 5. Fallback JSON-LD classique si des champs manquent
+        if title == "Titre non trouvé" or not cover_url or date_commercialisation == "Inconnue":
+            json_lds = soup.find_all('script', type='application/ld+json')
+            for script in json_lds:
+                if not script.string:
+                    continue
+                try:
+                    data = json.loads(script.string)
+                    items = data if isinstance(data, list) else [data]
+                    for item in items:
+                        if item.get("@type") in ["Book", "Product"] or "name" in item:
+                            if title == "Titre non trouvé" and item.get("name"):
+                                title = item.get("name")
+                            if not cover_url and item.get("image"):
+                                img = item.get("image")
+                                cover_url = img[0] if isinstance(img, list) else img
+                            if date_commercialisation == "Inconnue" and (item.get("releaseDate") or item.get("datePublished")):
+                                date_commercialisation = item.get("releaseDate") or item.get("datePublished")
+                except Exception:
+                    continue
 
         if date_commercialisation != "Inconnue" and len(date_commercialisation) >= 10:
             date_commercialisation = date_commercialisation[:10]
